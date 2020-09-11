@@ -1,8 +1,6 @@
-require_relative 'lib/prettyprint/version'
-
 Gem::Specification.new do |spec|
   spec.name          = "prettyprint"
-  spec.version       = Prettyprint::VERSION
+  spec.version       = "0.1.0"
   spec.authors       = ["Hiroshi SHIBATA"]
   spec.email         = ["hsbt@ruby-lang.org"]
 
