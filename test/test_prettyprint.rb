@@ -518,4 +518,31 @@ End
 
 end
 
+class BreakableIndentTest < Test::Unit::TestCase
+  def test_indent
+    out = PrettyPrint.format("".dup, 10) { |q|
+      q.group {
+        q.text("abcde")
+        q.nest(2) {
+          q.breakable(indent: true)
+          q.text("fghij")
+        }
+      }
+    }
+    assert_equal("abcde\n  fghij", out)
+  end
+
+  def test_no_indent
+    out = PrettyPrint.format("".dup, 10) { |q|
+      q.group {
+        q.text("abcde")
+        q.nest(2) {
+          q.breakable(indent: false)
+          q.text("fghij")
+        }
+      }
+    }
+    assert_equal("abcde\nfghij", out)
+  end
+end
 end

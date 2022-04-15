@@ -17,7 +17,6 @@
 #
 # == Bugs
 # * Box based formatting?
-# * Other (better) model/algorithm?
 #
 # Report any bugs at http://bugs.ruby-lang.org
 #
@@ -42,7 +41,7 @@ class PrettyPrint
   #     output
   #   end
   #
-  def PrettyPrint.format(output=''.dup, maxwidth=79, newline="\n", genspace=lambda {|n| ' ' * n})
+  def PrettyPrint.format(output=''.dup, maxwidth=80, newline="\n", genspace=lambda {|n| ' ' * n})
     q = PrettyPrint.new(output, maxwidth, newline, &genspace)
     yield q
     q.flush
@@ -70,7 +69,7 @@ class PrettyPrint
   # first argument +newline+ of PrettyPrint.new, and the result of a given
   # block for PrettyPrint.new.
   #
-  # +maxwidth+ specifies maximum line length. If it is not specified, 79 is
+  # +maxwidth+ specifies maximum line length. If it is not specified, 80 is
   # assumed. However actual outputs may overflow +maxwidth+ if long
   # non-breakable texts are provided.
   #
@@ -79,20 +78,13 @@ class PrettyPrint
   # The block is used to generate spaces. {|width| ' ' * width} is used if it
   # is not given.
   #
-  def initialize(output=''.dup, maxwidth=79, newline="\n", &genspace)
+  def initialize(output=''.dup, maxwidth=80, newline="\n", &genspace)
     @output = output
     @maxwidth = maxwidth
     @newline = newline
     @genspace = genspace || lambda {|n| ' ' * n}
-
-    @output_width = 0
-    @buffer_width = 0
-    @buffer = []
-
-    root_group = Group.new(0)
-    @group_stack = [root_group]
-    @group_queue = GroupQueue.new(root_group)
-    @indent = 0
+    @groups = [Group.new(0)]
+    @target = @groups.last.contents
   end
 
   # The output object.
@@ -102,7 +94,7 @@ class PrettyPrint
 
   # The maximum width of a line, before it is separated in to a newline
   #
-  # This defaults to 79, and should be an Integer
+  # This defaults to 80, and should be an Integer
   attr_reader :maxwidth
 
   # The value that is appended to +output+ to add a new line.
@@ -117,11 +109,12 @@ class PrettyPrint
   #   lambda {|n| ' ' * n}
   attr_reader :genspace
 
-  # The number of spaces to be indented
-  attr_reader :indent
+  # The stack of groups that are being printed.
+  attr_reader :groups
 
-  # The PrettyPrint::GroupQueue of groups in stack to be pretty printed
-  attr_reader :group_queue
+  # The current array of contents that calls to methods that generate print tree
+  # nodes will append to.
+  attr_reader :target
 
   # Returns the group most recently added to the stack.
   #
@@ -129,7 +122,7 @@ class PrettyPrint
   #   out = ""
   #   => ""
   #   q = PrettyPrint.new(out)
-  #   => #<PrettyPrint:0x82f85c0 @output="", @maxwidth=79, @newline="\n", @genspace=#<Proc:0x82f8368@/home/vbatts/.rvm/rubies/ruby-head/lib/ruby/2.0.0/prettyprint.rb:82 (lambda)>, @output_width=0, @buffer_width=0, @buffer=[], @group_stack=[#<PrettyPrint::Group:0x82f8138 @depth=0, @breakables=[], @break=false>], @group_queue=#<PrettyPrint::GroupQueue:0x82fb7c0 @queue=[[#<PrettyPrint::Group:0x82f8138 @depth=0, @breakables=[], @break=false>]]>, @indent=0>
+  #   => #<PrettyPrint:0x82f85c0 @output="", @maxwidth=80, @newline="\n", @genspace=#<Proc:0x82f8368@/home/vbatts/.rvm/rubies/ruby-head/lib/ruby/2.0.0/prettyprint.rb:82 (lambda)>, @output_width=0, @buffer_width=0, @buffer=[], @group_stack=[#<PrettyPrint::Group:0x82f8138 @depth=0, @breakables=[], @break=false>], @group_queue=#<PrettyPrint::GroupQueue:0x82fb7c0 @queue=[[#<PrettyPrint::Group:0x82f8138 @depth=0, @breakables=[], @break=false>]]>, @indent=0>
   #   q.group {
   #     q.text q.current_group.inspect
   #     q.text q.newline
@@ -153,24 +146,7 @@ class PrettyPrint
   #   #<PrettyPrint::Group:0x83541cc @depth=3, @breakables=[], @break=false>
   #   #<PrettyPrint::Group:0x8347e54 @depth=4, @breakables=[], @break=false>
   def current_group
-    @group_stack.last
-  end
-
-  # Breaks the buffer into lines that are shorter than #maxwidth
-  def break_outmost_groups
-    while @maxwidth < @output_width + @buffer_width
-      return unless group = @group_queue.deq
-      until group.breakables.empty?
-        data = @buffer.shift
-        @output_width = data.output(@output, @output_width)
-        @buffer_width -= data.width
-      end
-      while !@buffer.empty? && Text === @buffer.first
-        text = @buffer.shift
-        @output_width = text.output(@output, @output_width)
-        @buffer_width -= text.width
-      end
-    end
+    groups.last
   end
 
   # This adds +obj+ as a text of +width+ columns in width.
@@ -178,19 +154,15 @@ class PrettyPrint
   # If +width+ is not specified, obj.length is used.
   #
   def text(obj, width=obj.length)
-    if @buffer.empty?
-      @output << obj
-      @output_width += width
-    else
-      text = @buffer.last
-      unless Text === text
-        text = Text.new
-        @buffer << text
-      end
-      text.add(obj, width)
-      @buffer_width += width
-      break_outmost_groups
+    doc = target.last
+
+    unless Text === doc
+      doc = Text.new
+      target << doc
     end
+
+    doc.add(obj, width)
+    doc
   end
 
   # This is similar to #breakable except
@@ -221,19 +193,15 @@ class PrettyPrint
   # If +width+ is not specified, +sep.length+ is used. You will have to
   # specify this when +sep+ is a multibyte character, for example.
   #
-  def breakable(sep=' ', width=sep.length)
-    group = @group_stack.last
-    if group.break?
-      flush
-      @output << @newline
-      @output << @genspace.call(@indent)
-      @output_width = @indent
-      @buffer_width = 0
-    else
-      @buffer << Breakable.new(sep, width, self)
-      @buffer_width += width
-      break_outmost_groups
-    end
+  # By default, if the surrounding group is broken and a newline is inserted,
+  # the printer will indent the subsequent line up to the current level of
+  # indentation. You can disable this behavior with the +indent+ argument if
+  # that's not desired.
+  #
+  def breakable(sep=' ', width=sep.length, indent: true)
+    doc = Breakable.new(sep, width, indent: indent)
+    target << doc
+    doc
   end
 
   # Groups line break hints added in the block. The line break hints are all
@@ -248,79 +216,188 @@ class PrettyPrint
   #
   def group(indent=0, open_obj='', close_obj='', open_width=open_obj.length, close_width=close_obj.length)
     text open_obj, open_width
-    group_sub {
-      nest(indent) {
-        yield
-      }
-    }
-    text close_obj, close_width
-  end
 
-  # Takes a block and queues a new group that is indented 1 level further.
-  def group_sub
-    group = Group.new(@group_stack.last.depth + 1)
-    @group_stack.push group
-    @group_queue.enq group
-    begin
-      yield
-    ensure
-      @group_stack.pop
-      if group.breakables.empty?
-        @group_queue.delete group
+    doc = Group.new(groups.last.depth + 1)
+    groups << doc
+    target << doc
+
+    with_target(doc.contents) do
+      if indent != 0
+        nest(indent) { yield }
+      else
+        yield
       end
     end
+
+    groups.pop
+    text close_obj, close_width
+
+    doc
   end
 
   # Increases left margin after newline with +indent+ for line breaks added in
   # the block.
   #
   def nest(indent)
-    @indent += indent
-    begin
-      yield
-    ensure
-      @indent -= indent
+    doc = Align.new(indent: indent)
+    target << doc
+
+    with_target(doc.contents) { yield }
+    doc
+  end
+
+  # There are two modes in printing, break and flat. When we're in break mode,
+  # any lines will use their newline, any if-breaks will use their break
+  # contents, etc.
+  MODE_BREAK = 1
+
+  # This is another print mode much like MODE_BREAK. When we're in flat mode, we
+  # attempt to print everything on one line until we either hit a broken group,
+  # a forced line, or the maximum width.
+  MODE_FLAT = 2
+
+  # Flushes all of the generated print tree onto the output buffer, then clears
+  # the generated tree from memory.
+  def flush
+    # First, get the root group, since we placed one at the top to begin with.
+    doc = groups.first
+
+    # This represents how far along the current line we are. It gets reset
+    # back to 0 when we encounter a newline.
+    position = 0
+
+    # This is our command stack. A command consists of a triplet of an
+    # indentation level, the mode (break or flat), and a doc node.
+    commands = [[IndentLevel.new(genspace: genspace), MODE_BREAK, doc]]
+
+    # This is a small optimization boolean. It keeps track of whether or not
+    # when we hit a group node we should check if it fits on the same line.
+    should_remeasure = false
+
+    # This is a linear stack instead of a mutually recursive call defined on
+    # the individual doc nodes for efficiency.
+    while (indent, mode, doc = commands.pop)
+      case doc
+      when Text
+        doc.objs.each { |object| output << object }
+        position += doc.width
+      when Array
+        doc.reverse_each { |part| commands << [indent, mode, part] }
+      when Align
+        commands << [indent.align(doc.indent), mode, doc.contents]
+      when Group
+        if mode == MODE_FLAT && !should_remeasure
+          commands <<
+            [indent, doc.break? ? MODE_BREAK : MODE_FLAT, doc.contents]
+        else
+          should_remeasure = false
+          next_cmd = [indent, MODE_FLAT, doc.contents]
+
+          if !doc.break? && fits?(next_cmd, commands, maxwidth - position)
+            commands << next_cmd
+          else
+            commands << [indent, MODE_BREAK, doc.contents]
+          end
+        end
+      when Breakable
+        if mode == MODE_FLAT
+          output << doc.separator
+          position += doc.width
+          next
+        end
+
+        if !doc.indent?
+          output << newline
+
+          if indent.root
+            output << indent.root.value
+            position = indent.root.length
+          else
+            position = 0
+          end
+        else
+          output << newline
+          output << indent.value
+          position = indent.length
+        end
+      else
+        # Special case where the user has defined some way to get an extra doc
+        # node that we don't explicitly support into the list. In this case
+        # we're going to assume it's 0-width and just append it to the output
+        # buffer.
+        #
+        # This is useful behavior for putting marker nodes into the list so that
+        # you can know how things are getting mapped before they get printed.
+        output << doc
+      end
     end
   end
 
-  # outputs buffered data.
-  #
-  def flush
-    @buffer.each {|data|
-      @output_width = data.output(@output, @output_width)
-    }
-    @buffer.clear
-    @buffer_width = 0
+  # A convenience method used by a lot of the print tree node builders that
+  # temporarily changes the target that the builders will append to.
+  def with_target(target)
+    previous_target, @target = @target, target
+    yield
+    @target = previous_target
   end
 
-  # The Text class is the means by which to collect strings from objects.
-  #
-  # This class is intended for internal use of the PrettyPrint buffers.
-  class Text # :nodoc:
+  private
 
-    # Creates a new text object.
-    #
-    # This constructor takes no arguments.
-    #
-    # The workflow is to append a PrettyPrint::Text object to the buffer, and
-    # being able to call the buffer.last() to reference it.
-    #
-    # As there are objects, use PrettyPrint::Text#add to include the objects
-    # and the width to utilized by the String version of this object.
+  # This method returns a boolean as to whether or not the remaining commands
+  # fit onto the remaining space on the current line. If we finish printing
+  # all of the commands or if we hit a newline, then we return true. Otherwise
+  # if we continue printing past the remaining space, we return false.
+  def fits?(next_command, rest_commands, remaining)
+    # This is the index in the remaining commands that we've handled so far.
+    # We reverse through the commands and add them to the stack if we've run
+    # out of nodes to handle.
+    rest_index = rest_commands.length
+
+    # This is our stack of commands, very similar to the commands list in the
+    # print method.
+    commands = [next_command]
+
+    while remaining >= 0
+      if commands.empty?
+        return true if rest_index == 0
+
+        rest_index -= 1
+        commands << rest_commands[rest_index]
+        next
+      end
+
+      indent, mode, doc = commands.pop
+
+      case doc
+      when Text
+        remaining -= doc.width
+      when Array
+        doc.reverse_each { |part| commands << [indent, mode, part] }
+      when Align
+        commands << [indent.align(doc.indent), mode, doc.contents]
+      when Group
+        commands << [indent, doc.break? ? MODE_BREAK : mode, doc.contents]
+      when Breakable
+        if mode == MODE_FLAT
+          remaining -= doc.width
+          next
+        end
+
+        return true
+      end
+    end
+
+    false
+  end
+
+  # A node in the print tree that represents plain content that cannot be broken
+  # up (by default this assumes strings, but it can really be anything).
+  class Text
+    attr_reader :objs, :width
+
     def initialize
       @objs = []
       @width = 0
-    end
-
-    # The total width of the objects included in this Text object.
-    attr_reader :width
-
-    # Render the String text of the objects that have been added to this Text object.
-    #
-    # Output the text to +out+, and increment the width to +output_width+
-    def output(out, output_width)
-      @objs.each {|obj| out << obj}
-      output_width + @width
     end
 
     # Include +obj+ in the objects to be pretty printed, and increment
@@ -331,151 +408,97 @@ class PrettyPrint
     end
   end
 
-  # The Breakable class is used for breaking up object information
-  #
-  # This class is intended for internal use of the PrettyPrint buffers.
-  class Breakable # :nodoc:
+  # This object represents the current level of indentation within the printer.
+  # It has the ability to generate new levels of indentation through the #align
+  # and #indent methods.
+  class IndentLevel
+    attr_reader :genspace, :value, :length, :queue, :root
 
-    # Create a new Breakable object.
-    #
-    # Arguments:
-    # * +sep+ String of the separator
-    # * +width+ Integer width of the +sep+
-    # * +q+ parent PrettyPrint object, to base from
-    def initialize(sep, width, q)
-      @obj = sep
-      @width = width
-      @pp = q
-      @indent = q.indent
-      @group = q.current_group
-      @group.breakables.push self
+    def initialize(
+      genspace:,
+      value: genspace.call(0),
+      length: 0,
+      queue: [],
+      root: nil
+    )
+      @genspace = genspace
+      @value = value
+      @length = length
+      @queue = queue
+      @root = root
     end
 
-    # Holds the separator String
-    #
-    # The +sep+ argument from ::new
-    attr_reader :obj
+    def align(n)
+      next_value = genspace.call(0)
+      next_length = 0
+      next_queue = [*queue, n]
 
-    # The width of +obj+ / +sep+
-    attr_reader :width
+      last_spaces = 0
+      next_queue.each { |part| last_spaces += part }
 
-    # The number of spaces to indent.
-    #
-    # This is inferred from +q+ within PrettyPrint, passed in ::new
-    attr_reader :indent
-
-    # Render the String text of the objects that have been added to this
-    # Breakable object.
-    #
-    # Output the text to +out+, and increment the width to +output_width+
-    def output(out, output_width)
-      @group.breakables.shift
-      if @group.break?
-        out << @pp.newline
-        out << @pp.genspace.call(@indent)
-        @indent
-      else
-        @pp.group_queue.delete @group if @group.breakables.empty?
-        out << @obj
-        output_width + @width
+      if last_spaces > 0
+        next_value << genspace.call(last_spaces)
+        next_length += last_spaces
       end
+
+      IndentLevel.new(
+        genspace: genspace,
+        value: next_value,
+        length: next_length,
+        queue: next_queue,
+        root: root
+      )
     end
   end
 
-  # The Group class is used for making indentation easier.
-  #
-  # While this class does neither the breaking into newlines nor indentation,
-  # it is used in a stack (as well as a queue) within PrettyPrint, to group
-  # objects.
-  #
-  # For information on using groups, see PrettyPrint#group
-  #
-  # This class is intended for internal use of the PrettyPrint buffers.
-  class Group # :nodoc:
-    # Create a Group object
-    #
-    # Arguments:
-    # * +depth+ - this group's relation to previous groups
-    def initialize(depth)
+  # A node in the print tree that represents aligning nested nodes to a certain
+  # prefix width or string.
+  class Align
+    attr_reader :indent, :contents
+
+    def initialize(indent:, contents: [])
+      @indent = indent
+      @contents = contents
+    end
+  end
+
+  # A node in the print tree that represents a place in the buffer that the
+  # content can be broken onto multiple lines.
+  class Breakable
+    attr_reader :separator, :width
+
+    def initialize(separator = " ", width = separator.length, indent: true)
+      @separator = separator
+      @width = width
+      @indent = indent
+    end
+
+    def indent?
+      @indent
+    end
+  end
+
+  # A node in the print tree that represents a group of items which the printer
+  # should try to fit onto one line. This is the basic command to tell the
+  # printer when to break. Groups are usually nested, and the printer will try
+  # to fit everything on one line, but if it doesn't fit it will break the
+  # outermost group first and try again. It will continue breaking groups until
+  # everything fits (or there are no more groups to break).
+  class Group
+    attr_reader :depth, :contents
+
+    def initialize(depth, contents: [])
       @depth = depth
-      @breakables = []
+      @contents = contents
       @break = false
     end
 
-    # This group's relation to previous groups
-    attr_reader :depth
-
-    # Array to hold the Breakable objects for this Group
-    attr_reader :breakables
-
-    # Makes a break for this Group, and returns true
     def break
       @break = true
     end
 
-    # Boolean of whether this Group has made a break
     def break?
       @break
-    end
-
-    # Boolean of whether this Group has been queried for being first
-    #
-    # This is used as a predicate, and ought to be called first.
-    def first?
-      if defined? @first
-        false
-      else
-        @first = false
-        true
-      end
-    end
-  end
-
-  # The GroupQueue class is used for managing the queue of Group to be pretty
-  # printed.
-  #
-  # This queue groups the Group objects, based on their depth.
-  #
-  # This class is intended for internal use of the PrettyPrint buffers.
-  class GroupQueue # :nodoc:
-    # Create a GroupQueue object
-    #
-    # Arguments:
-    # * +groups+ - one or more PrettyPrint::Group objects
-    def initialize(*groups)
-      @queue = []
-      groups.each {|g| enq g}
-    end
-
-    # Enqueue +group+
-    #
-    # This does not strictly append the group to the end of the queue,
-    # but instead adds it in line, base on the +group.depth+
-    def enq(group)
-      depth = group.depth
-      @queue << [] until depth < @queue.length
-      @queue[depth] << group
-    end
-
-    # Returns the outer group of the queue
-    def deq
-      @queue.each {|gs|
-        (gs.length-1).downto(0) {|i|
-          unless gs[i].breakables.empty?
-            group = gs.slice!(i, 1).first
-            group.break
-            return group
-          end
-        }
-        gs.each {|group| group.break}
-        gs.clear
-      }
-      return nil
-    end
-
-    # Remote +group+ from this queue
-    def delete(group)
-      @queue[group.depth].delete(group)
     end
   end
 
@@ -502,7 +525,6 @@ class PrettyPrint
     #               This argument is a noop.
     def initialize(output, maxwidth=nil, newline=nil)
       @output = output
-      @first = [true]
     end
 
     # Add +obj+ to the text to be output.
@@ -515,8 +537,14 @@ class PrettyPrint
     # Appends +sep+ to the text to be output. By default +sep+ is ' '
     #
     # +width+ argument is here for compatibility. It is a noop argument.
-    def breakable(sep=' ', width=nil)
+    def breakable(sep=' ', width=nil, indent: nil)
       @output << sep
+    end
+
+    # Appends +separator+ to the output buffer. +width+ is a noop here for
+    # compatibility.
+    def fill_breakable(separator = " ", width = separator.length)
+      @output << separator
     end
 
     # Takes +indent+ arg, but does nothing with it.
@@ -535,22 +563,13 @@ class PrettyPrint
     # * +open_width+ - noop argument. Present for compatibility.
     # * +close_width+ - noop argument. Present for compatibility.
     def group(indent=nil, open_obj='', close_obj='', open_width=nil, close_width=nil)
-      @first.push true
       @output << open_obj
       yield
       @output << close_obj
-      @first.pop
     end
 
     # Method present for compatibility, but is a noop
     def flush # :nodoc:
-    end
-
-    # This is used as a predicate, and ought to be called first.
-    def first?
-      result = @first[-1]
-      @first[-1] = false
-      result
     end
   end
 end
