@@ -238,6 +238,14 @@ class PrettyPrint
     end
   end
 
+  # This says "force a line break here".
+  #
+  # It will force the current group's "breakables" to break.
+  def break
+    breakable
+    current_group.break
+  end
+
   # Groups line break hints added in the block. The line break hints are all
   # to be used or not.
   #
