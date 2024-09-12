@@ -518,4 +518,31 @@ End
 
 end
 
+
+class Break < Test::Unit::TestCase # :nodoc:
+  def format()
+    PrettyPrint.format(''.dup) {|q|
+      q.group {
+        q.text 'abc'
+        q.breakable
+        q.text 'def'
+        q.group {
+          q.break
+          q.text 'ghi'
+        }
+        q.breakable
+        q.text 'jkl'
+      }
+    }
+  end
+
+  def test_00_04
+    expected = <<'End'.chomp
+abc def
+ghi jkl
+End
+    assert_equal(expected, format())
+  end
+end
+
 end
