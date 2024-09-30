@@ -544,6 +544,11 @@ class PrettyPrint
       @first.pop
     end
 
+    # Yields to the block, for compatibility
+    def group_sub
+      yield
+    end
+
     # Method present for compatibility, but is a noop
     def flush # :nodoc:
     end
