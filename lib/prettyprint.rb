@@ -465,7 +465,7 @@ class PrettyPrint
       @queue.each {|gs|
         (gs.length-1).downto(0) {|i|
           unless gs[i].breakables.empty?
-            group = gs.slice!(i, 1).first
+            group = gs.delete_at(i)
             group.break
             return group
           end
