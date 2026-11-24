@@ -548,10 +548,14 @@ class PrettyPrint
     # * +close_width+ - noop argument. Present for compatibility.
     def group(indent=nil, open_obj='', close_obj='', open_width=nil, close_width=nil)
       @first.push true
-      @output << open_obj
-      yield
-      @output << close_obj
-      @first.pop
+      begin
+        @output << open_obj
+        yield
+        @output << close_obj
+        @first.last
+      ensure
+        @first.pop
+      end
     end
 
     # Yields to a block for compatibility.
